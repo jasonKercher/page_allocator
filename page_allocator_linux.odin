@@ -55,6 +55,17 @@ _page_aligned_alloc :: proc(size, alignment, granularity: int,
 		return nil, .Invalid_Argument
 	}
 
+	alignment := alignment
+	alignment = max(alignment, GRANULARITY_MIN)
+	if granularity == GRANULARITY_MIN && alignment == GRANULARITY_MIN {
+		size_full := mem.align_forward_int(size, GRANULARITY_MIN)
+		memory, err = virtual.reserve_and_commit(uint(size_full))
+		if err != nil {
+			memory = memory[:size]
+		}
+		return
+	}
+
 	if .Allow_Large_Pages in flags && granularity >= mem.Gigabyte && size >= mem.Gigabyte {
 		raw_map_flags := i32(MAP_HUGE_1GB)
 		map_flags := transmute(linux.Map_Flags)(raw_map_flags)
@@ -67,18 +78,7 @@ _page_aligned_alloc :: proc(size, alignment, granularity: int,
 		}
 	}
 
-	alignment := alignment
-	alignment = max(alignment, GRANULARITY_MIN)
-	if granularity == GRANULARITY_MIN && alignment == GRANULARITY_MIN {
-		size_full := mem.align_forward_int(size, GRANULARITY_MIN)
-		memory, err = virtual.reserve_and_commit(uint(size_full))
-		if err != nil {
-			memory = memory[:size]
-		}
-		return
-	}
-
-	huge_if: if .Allow_Large_Pages in flags && granularity > 2 * mem.Megabyte && size > 2 * mem.Megabyte {
+	if .Allow_Large_Pages in flags && granularity > 2 * mem.Megabyte && size > 2 * mem.Megabyte {
 		raw_map_flags := i32(MAP_HUGE_2MB)
 		map_flags := transmute(linux.Map_Flags)(raw_map_flags)
 		map_flags += {.ANONYMOUS, .PRIVATE, .HUGETLB}
