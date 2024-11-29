@@ -57,8 +57,9 @@ _page_aligned_alloc :: proc(size, alignment, granularity: int,
 
 	alignment := alignment
 	alignment = max(alignment, GRANULARITY_MIN)
-	if granularity == GRANULARITY_MIN && alignment == GRANULARITY_MIN {
-		size_full := mem.align_forward_int(size, GRANULARITY_MIN)
+
+	size_full := mem.align_forward_int(size, granularity)
+	if alignment == GRANULARITY_MIN {
 		memory, err = virtual.reserve_and_commit(uint(size_full))
 		if err != nil {
 			memory = memory[:size]
@@ -66,42 +67,39 @@ _page_aligned_alloc :: proc(size, alignment, granularity: int,
 		return
 	}
 
-	if .Allow_Large_Pages in flags && granularity >= mem.Gigabyte && size >= mem.Gigabyte {
-		raw_map_flags := i32(MAP_HUGE_1GB)
-		map_flags := transmute(linux.Map_Flags)(raw_map_flags)
-		map_flags += {.ANONYMOUS, .PRIVATE, .HUGETLB}
+	if .Allow_Large_Pages in flags {
+		if granularity >= mem.Gigabyte && size >= mem.Gigabyte {
+			raw_map_flags := i32(MAP_HUGE_1GB)
+			map_flags := transmute(linux.Map_Flags)(raw_map_flags)
+			map_flags += {.ANONYMOUS, .PRIVATE, .HUGETLB}
 
-		size_full := uint(mem.align_forward_int(size, granularity))
-		ptr, errno := linux.mmap(0, uint(size_full), {.READ, .WRITE}, map_flags)
-		if ptr != nil && errno == nil {
-			return mem.byte_slice(ptr, size), nil
-		}
-	}
-
-	if .Allow_Large_Pages in flags && granularity > 2 * mem.Megabyte && size > 2 * mem.Megabyte {
-		raw_map_flags := i32(MAP_HUGE_2MB)
-		map_flags := transmute(linux.Map_Flags)(raw_map_flags)
-		map_flags += {.ANONYMOUS, .PRIVATE, .HUGETLB}
-
-		size_full := mem.align_forward_int(size, granularity)
-		if alignment < 2 * mem.Megabyte {
 			ptr, errno := linux.mmap(0, uint(size_full), {.READ, .WRITE}, map_flags)
 			if ptr != nil && errno == nil {
 				return mem.byte_slice(ptr, size), nil
 			}
-		} else {
-			reserve_size := size_full + (alignment - 2 * mem.Megabyte)
-			reserve_ptr, errno := linux.mmap(0, uint(size_full), {}, map_flags)
-			reserve := mem.byte_slice(reserve_ptr, reserve_size)
-			if reserve_ptr != nil && errno == nil {
-				return seek_alignment_and_commit(reserve, size, alignment, granularity)
+		} else if granularity > 2 * mem.Megabyte && size > 2 * mem.Megabyte {
+			raw_map_flags := i32(MAP_HUGE_2MB)
+			map_flags := transmute(linux.Map_Flags)(raw_map_flags)
+			map_flags += {.ANONYMOUS, .PRIVATE, .HUGETLB}
+
+			if alignment < 2 * mem.Megabyte {
+				ptr, errno := linux.mmap(0, uint(size_full), {.READ, .WRITE}, map_flags)
+				if ptr != nil && errno == nil {
+					return mem.byte_slice(ptr, size), nil
+				}
+			} else {
+				reserve_size := size_full + (alignment - 2 * mem.Megabyte)
+				reserve_ptr, errno := linux.mmap(0, uint(size_full), {}, map_flags)
+				reserve := mem.byte_slice(reserve_ptr, reserve_size)
+				if reserve_ptr != nil && errno == nil {
+					return seek_alignment_and_commit(reserve, size, alignment, granularity)
+				}
 			}
 		}
 	}
 
 	// We gave ourselves enough extra space to retrieve the size AND seek
 	// to the desired alignment.
-	size_full := mem.align_forward_int(size, granularity)
 	reserve_size := size_full + (alignment - GRANULARITY_MIN)
 	reserve := virtual.reserve(uint(reserve_size)) or_return
 	return seek_alignment_and_commit(reserve, size, alignment, granularity)
@@ -146,9 +144,11 @@ _page_aligned_resize :: proc(old_ptr: rawptr,
 	}
 
 	// Can we resize in place?
-	memory, err = _resize_allocation(old_ptr, uint(old_size_full), uint(new_size_full), may_move=false)
-	if err == nil {
-		return memory[:new_size], nil
+	if mem.is_aligned(old_ptr, new_alignment) {
+		memory, err = _resize_allocation(old_ptr, uint(old_size_full), uint(new_size_full), may_move=false)
+		if err == nil {
+			return memory[:new_size], nil
+		}
 	}
 
 	// Do we *need* to do a manual allocate -> copy -> free?
