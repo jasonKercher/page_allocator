@@ -89,7 +89,7 @@ _page_aligned_alloc :: proc(size, alignment, granularity: int,
 				}
 			} else {
 				reserve_size := size_full + (alignment - 2 * mem.Megabyte)
-				reserve_ptr, errno := linux.mmap(0, uint(size_full), {}, map_flags)
+				reserve_ptr, errno := linux.mmap(0, uint(reserve_size), {}, map_flags)
 				reserve := mem.byte_slice(reserve_ptr, reserve_size)
 				if reserve_ptr != nil && errno == nil {
 					return seek_alignment_and_commit(reserve, size, alignment, granularity)
